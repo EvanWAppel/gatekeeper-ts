@@ -73,7 +73,7 @@ export class AccessVerifier {
 
   /**
    * Startup self-check: rejects if the team's signing keys can't be loaded, or none of them
-   * imports as an RS256 public key.
+   * is a usable RS256 public key (imports, 2048 bits or more, has a kid).
    * Without this, a broken environment looks exactly like "nobody is signed in" — every
    * visitor quietly gets the public version. Await it once at startup and log the error.
    */
@@ -92,15 +92,19 @@ export class AccessVerifier {
       (k) =>
         k &&
         k.kty === "RSA" &&
+        typeof k.kid === "string" &&
+        k.kid !== "" &&
         (k.alg === undefined || k.alg === "RS256") &&
         (k.use === undefined || k.use === "sig") &&
         (!Array.isArray(k.key_ops) || k.key_ops.includes("verify")),
     )
-    // Labels aren't enough: a key only counts if it imports as an RS256 public key.
+    // Labels aren't enough: a key only counts if it imports as an RS256 public key that jose
+    // will verify with (2048 bits or more) and carries the kid tokens look it up by.
     let usable = 0
     for (const k of candidates) {
       try {
-        if ((await importJWK(k, "RS256")).type === "public") usable++
+        const key = await importJWK(k, "RS256")
+        if (key.type === "public" && key.algorithm.modulusLength >= 2048) usable++
       } catch {
         // not a usable key
       }

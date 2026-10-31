@@ -12,7 +12,7 @@ export interface AccessVerifierOptions {
   teamDomain: string
   /** The app's Application Audience (AUD) tag (Access → the app → Overview). */
   audience: string
-  /** Clock skew allowed on exp / nbf, 0–300 seconds. Default 60. */
+  /** Clock skew allowed on exp, nbf and iat, 0–300 seconds. Default 60. */
   leewaySeconds?: number
   /** How long the team's key set is trusted before it is refetched. Default 3600. */
   keyCacheSeconds?: number
@@ -27,7 +27,7 @@ export type HeadersInput =
 export declare class AccessVerifier {
   /** Throws on bad configuration, so it fails at startup, not quietly per request. */
   constructor(options: AccessVerifierOptions)
-  /** Rejects if no team signing key loads as an RS256 public key. Await once at startup and log. */
+  /** Rejects unless a team signing key is a usable RS256 public key (≥2048 bits, has a kid). Await once at startup and log. */
   check(): Promise<void>
   /** The identity for a valid token, else null. Never rejects. */
   verify(token: unknown): Promise<Identity | null>

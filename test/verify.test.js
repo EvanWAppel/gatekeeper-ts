@@ -1,7 +1,7 @@
 // Every way a Cloudflare Access token can be wrong must come back as null (→ demo).
 // Ported from gatekeeper (Python) tests/test_verify.py; same cases, same review findings.
 import assert from "node:assert/strict"
-import { createHmac } from "node:crypto"
+import { createHmac, generateKeyPairSync } from "node:crypto"
 import { readFileSync } from "node:fs"
 import { describe, test } from "node:test"
 
@@ -411,9 +411,16 @@ describe("review fixes", () => {
     assert.notEqual(await verifier().verify(await makeToken({ iat: now() + 30 })), null)
   })
 
-  test("a non-numeric iat is null", async (t) => {
+  test("a non-numeric iat is null (jose rejects it before our guard runs)", async (t) => {
     stubFetch(t)
     assert.equal(await verifier().verify(await makeToken({ iat: "yesterday" })), null)
+  })
+
+  test("iat exactly at now + leeway is accepted; just past it is null", async (t) => {
+    stubFetch(t)
+    const v = verifier({ leewaySeconds: 10 })
+    assert.notEqual(await v.verify(await makeToken({ iat: now() + 10 })), null)
+    assert.equal(await v.verify(await makeToken({ iat: now() + 15 })), null)
   })
 
   test("a token without iat is still accepted (Cloudflare always sets it; PyJWT doesn't require it)", async (t) => {
@@ -475,6 +482,23 @@ describe("review fixes", () => {
     assert.equal(seen.length, 1)
     assert.equal(seen[0].redirect, "manual")
     assert.ok(seen[0].signal instanceof AbortSignal)
+  })
+})
+
+// --- second review (2026-10-31): check() must match what verify can actually use ------
+
+describe("check() matches verify", () => {
+  test("rejects a key set whose only key is under 2048 bits (jose won't verify with it)", async (t) => {
+    // jose refuses to make one, so use node:crypto.
+    const { publicKey } = generateKeyPairSync("rsa", { modulusLength: 1024 })
+    stubFetch(t, { keys: [{ ...publicKey.export({ format: "jwk" }), kid: "small", alg: "RS256", use: "sig" }] })
+    await assert.rejects(verifier().check(), /signing keys/)
+  })
+
+  test("rejects a key set whose only key has no kid (Cloudflare tokens always name one)", async (t) => {
+    const { kid: _, ...noKid } = teamKey.jwk
+    stubFetch(t, { keys: [noKid] })
+    await assert.rejects(verifier().check(), /signing keys/)
   })
 })
 
