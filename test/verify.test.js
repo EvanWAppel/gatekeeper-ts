@@ -335,3 +335,146 @@ describe("check()", () => {
     })
   })
 })
+
+// --- review fixes (2026-10-31) -------------------------------------------------------
+
+describe("review fixes", () => {
+  // Finding 2: check() must load each key, not just read its labels.
+  test("check() rejects a key set whose only RSA key can't be imported", async (t) => {
+    stubFetch(t, { keys: [{ kty: "RSA", kid: "k1", alg: "RS256", use: "sig" }] })
+    await assert.rejects(verifier().check(), /signing keys/)
+  })
+
+  test("check() rejects a key set that serves a private key", async (t) => {
+    const priv = { ...(await exportJWK(teamKey.privateKey)), kid: "k1", alg: "RS256", use: "sig" }
+    stubFetch(t, { keys: [priv] })
+    await assert.rejects(verifier().check(), /signing keys/)
+  })
+
+  test("check() passes when one usable key sits beside junk", async (t) => {
+    stubFetch(t, { keys: [{ kty: "RSA", kid: "junk" }, teamKey.jwk] })
+    await verifier().check()
+  })
+
+  // Finding 3: fromHeaders never rejects, whatever it is handed.
+  test("fromHeaders resolves null when the headers' get() throws", async (t) => {
+    stubFetch(t)
+    const headers = {
+      get() {
+        throw new Error("boom")
+      },
+    }
+    assert.equal(await verifier().fromHeaders(headers), null)
+  })
+
+  test("fromHeaders resolves null when enumerating the headers throws", async (t) => {
+    stubFetch(t)
+    const headers = new Proxy(
+      {},
+      {
+        ownKeys() {
+          throw new Error("boom")
+        },
+      },
+    )
+    assert.equal(await verifier().fromHeaders(headers), null)
+  })
+
+  // Finding 4: two letter-case variants of the header are ambiguous, in either order.
+  test("a plain object carrying the header twice in different case is null", async (t) => {
+    stubFetch(t)
+    const good = await makeToken()
+    const v = verifier()
+    assert.equal(await v.fromHeaders({ [HEADER.toLowerCase()]: good, [HEADER]: "junk" }), null)
+    assert.equal(await v.fromHeaders({ [HEADER]: "junk", [HEADER.toLowerCase()]: good }), null)
+    assert.equal(await v.fromHeaders({ [HEADER.toLowerCase()]: good, [HEADER]: good }), null)
+  })
+
+  test("a Map carrying the header twice in different case is null", async (t) => {
+    stubFetch(t)
+    const good = await makeToken()
+    const map = new Map([
+      [HEADER.toLowerCase(), good],
+      [HEADER.toUpperCase(), good],
+    ])
+    assert.equal(await verifier().fromHeaders(map), null)
+  })
+
+  // Finding 5: parity with PyJWT on iat.
+  test("a token issued in the future, beyond leeway, is null", async (t) => {
+    stubFetch(t)
+    assert.equal(await verifier().verify(await makeToken({ iat: now() + 3600 })), null)
+  })
+
+  test("a token issued just ahead, within leeway, is accepted", async (t) => {
+    stubFetch(t)
+    assert.notEqual(await verifier().verify(await makeToken({ iat: now() + 30 })), null)
+  })
+
+  test("a non-numeric iat is null", async (t) => {
+    stubFetch(t)
+    assert.equal(await verifier().verify(await makeToken({ iat: "yesterday" })), null)
+  })
+
+  test("a token without iat is still accepted (Cloudflare always sets it; PyJWT doesn't require it)", async (t) => {
+    stubFetch(t)
+    assert.notEqual(await verifier().verify(await makeToken({ iat: null })), null)
+  })
+
+  // Finding 8: cases the review found missing.
+  test("fromHeaders reads a Map", async (t) => {
+    stubFetch(t)
+    assert.notEqual(await verifier().fromHeaders(new Map([[HEADER, await makeToken()]])), null)
+  })
+
+  test("non-string header names are skipped", async (t) => {
+    stubFetch(t)
+    const map = new Map([
+      [1, "x"],
+      [Symbol("s"), "y"],
+      [HEADER, await makeToken()],
+    ])
+    assert.notEqual(await verifier().fromHeaders(map), null)
+  })
+
+  test("a header appended twice to a Headers object is null", async (t) => {
+    stubFetch(t)
+    const token = await makeToken()
+    const headers = new Headers()
+    headers.append(HEADER, token)
+    headers.append(HEADER, token)
+    assert.equal(await verifier().fromHeaders(headers), null)
+  })
+
+  test("an aud array containing this app among others is accepted", async (t) => {
+    stubFetch(t)
+    assert.notEqual(await verifier().verify(await makeToken({ aud: ["other-app", AUD, "third"] })), null)
+  })
+
+  test("a token without a kid is null when the team publishes two keys", async (t) => {
+    stubFetch(t, { keys: [teamKey.jwk, (await keypair("team-key-2")).jwk] })
+    const token = await new SignJWT({ aud: [AUD], iss: TEAM, email: "x@example.com" })
+      .setProtectedHeader({ alg: "RS256" })
+      .setIssuedAt()
+      .setExpirationTime("1h")
+      .sign(teamKey.privateKey)
+    assert.equal(await verifier().verify(token), null)
+  })
+
+  test("the certs fetch asks for manual redirects and a timeout signal", async (t) => {
+    const seen = []
+    const original = globalThis.fetch
+    globalThis.fetch = async (url, init) => {
+      seen.push(init)
+      return new Response(JSON.stringify({ keys: [teamKey.jwk] }), { status: 200 })
+    }
+    t.after(() => {
+      globalThis.fetch = original
+    })
+    await verifier().verify(await makeToken())
+    assert.equal(seen.length, 1)
+    assert.equal(seen[0].redirect, "manual")
+    assert.ok(seen[0].signal instanceof AbortSignal)
+  })
+})
+

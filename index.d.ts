@@ -27,10 +27,10 @@ export type HeadersInput =
 export declare class AccessVerifier {
   /** Throws on bad configuration, so it fails at startup, not quietly per request. */
   constructor(options: AccessVerifierOptions)
-  /** Rejects if the team's signing keys can't be loaded. Await once at startup and log. */
+  /** Rejects if no team signing key loads as an RS256 public key. Await once at startup and log. */
   check(): Promise<void>
   /** The identity for a valid token, else null. Never rejects. */
   verify(token: unknown): Promise<Identity | null>
-  /** verify the Access header from a request's headers (any letter case). */
+  /** verify the Access header from a request's headers (any letter case; sent twice → null). Never rejects. */
   fromHeaders(headers: HeadersInput | null | undefined): Promise<Identity | null>
 }

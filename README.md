@@ -11,12 +11,14 @@ through. `AccessVerifier` resolves to an `Identity` only when that token is:
   in the token is ignored; `alg: none`, HMAC and other RSA algorithms are rejected; redirects
   from the certs URL are not followed; a key Cloudflare rotates out stops working on the next
   key-set refresh, hourly by default),
-- issued by your team (`iss`), meant for this app (`aud`), and in date (`exp`, `nbf`),
+- issued by your team (`iss`), meant for this app (`aud`), and in date (`exp`, `nbf`, and an
+  `iat` that isn't in the future),
 - carrying an `email` (service tokens are not people),
 - under 16 KiB.
 
-Everything else (no header, a repeated header, a forged or expired token, Cloudflare
-unreachable) resolves to `null`. Show the private version only on an `Identity`, and every
+Everything else (no header, a header sent more than once in any letter case, a forged or
+expired token, Cloudflare unreachable) resolves to `null`; `verify` and `fromHeaders` never
+reject. Show the private version only on an `Identity`, and every
 failure lands on the public side.
 
 Bad configuration throws when the verifier is built, so it fails at startup, not quietly per
@@ -44,7 +46,7 @@ const verifier = new AccessVerifier({
 ```
 
 At startup, `await verifier.check()` and log the error it throws if the team's keys can't be
-loaded. Otherwise a broken environment looks exactly like "nobody is signed in".
+loaded or none of them imports as an RS256 public key. Otherwise a broken environment looks exactly like "nobody is signed in".
 
 Next.js (16+, `proxy.ts`), guarding the same paths as the Access app:
 
@@ -62,6 +64,25 @@ export const config = { matcher: ["/settings/:path*", "/api/settings/:path*"] }
 
 Keep the `matcher` and the Access app's paths in step: a path in one and not the other is
 either unguarded by the app or unreachable through Cloudflare.
+
+**The matcher is not enough for anything that changes state.** A Server Action runs as a POST
+to whatever page it's called from, which may sit outside both the matcher and the Access app,
+so neither check runs. Every Server Action and route handler that writes owner data checks
+for itself:
+
+```ts
+"use server"
+import { headers } from "next/headers"
+
+export async function saveSettings(form: FormData) {
+  const identity = await verifier.fromHeaders(await headers())
+  if (!identity) throw new Error("Forbidden")
+  // …
+}
+```
+
+That call only succeeds when the request came through an Access-guarded path, so put the
+pages that call owner actions under the Access app too.
 
 Any framework: pass the request's headers (a `Headers`, a `Map`, or a plain object such as
 Node's `req.headers`) to `fromHeaders`, or the header value to `verify`.

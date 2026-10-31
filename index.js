@@ -9,7 +9,7 @@
 // Configuration (team domain, the app's AUD tag) is passed in by each app; none lives here.
 // Port of gatekeeper (Python); same checks, same review findings.
 
-import { createRemoteJWKSet, jwtVerify } from "jose"
+import { createRemoteJWKSet, importJWK, jwtVerify } from "jose"
 
 export const HEADER = "Cf-Access-Jwt-Assertion"
 
@@ -72,7 +72,8 @@ export class AccessVerifier {
   }
 
   /**
-   * Startup self-check: rejects if the team's signing keys can't be loaded and used.
+   * Startup self-check: rejects if the team's signing keys can't be loaded, or none of them
+   * imports as an RS256 public key.
    * Without this, a broken environment looks exactly like "nobody is signed in" — every
    * visitor quietly gets the public version. Await it once at startup and log the error.
    */
@@ -87,7 +88,7 @@ export class AccessVerifier {
         cause: err,
       })
     }
-    const usable = (set?.keys ?? []).filter(
+    const candidates = (set?.keys ?? []).filter(
       (k) =>
         k &&
         k.kty === "RSA" &&
@@ -95,7 +96,16 @@ export class AccessVerifier {
         (k.use === undefined || k.use === "sig") &&
         (!Array.isArray(k.key_ops) || k.key_ops.includes("verify")),
     )
-    if (usable.length === 0) throw new Error("Cloudflare Access returned no usable signing keys")
+    // Labels aren't enough: a key only counts if it imports as an RS256 public key.
+    let usable = 0
+    for (const k of candidates) {
+      try {
+        if ((await importJWK(k, "RS256")).type === "public") usable++
+      } catch {
+        // not a usable key
+      }
+    }
+    if (usable === 0) throw new Error("Cloudflare Access returned no usable signing keys")
   }
 
   /** The signed-in identity for a valid token, else null. Never throws. */
@@ -114,6 +124,10 @@ export class AccessVerifier {
       // Fail toward the public version. Never log the token itself.
       return null
     }
+    // jose checks iat only with maxTokenAge; PyJWT rejects one issued in the future.
+    if (payload.iat !== undefined && !(isNumber(payload.iat) && payload.iat <= Date.now() / 1000 + this.#leeway)) {
+      return null
+    }
     const email = payload.email
     if (typeof email !== "string" || !email) return null // service tokens are not people
     const subject = typeof payload.sub === "string" ? payload.sub : ""
@@ -122,20 +136,32 @@ export class AccessVerifier {
 
   /**
    * verify the Access header from a request's headers: a fetch / Next.js Headers object,
-   * a Map, or a plain object (any letter case). A repeated header is ambiguous: null.
+   * a Map, or a plain object (any letter case). A header sent more than once is ambiguous:
+   * null. Never throws, whatever it is handed.
    */
   async fromHeaders(headers) {
-    if (!headers || typeof headers !== "object") return null
-    if (!(headers instanceof Map) && typeof headers.get === "function") {
-      return this.verify(headers.get(HEADER))
+    let token
+    try {
+      token = readHeader(headers)
+    } catch {
+      return null // an exotic headers object must not break the "never throws" promise
     }
-    const wanted = HEADER.toLowerCase()
-    const entries = headers instanceof Map ? headers.entries() : Object.entries(headers)
-    for (const [name, value] of entries) {
-      if (typeof name === "string" && name.toLowerCase() === wanted) {
-        return typeof value === "string" ? this.verify(value) : null
-      }
-    }
-    return null
+    return this.verify(token)
   }
+}
+
+// The one Access header value, or null when it's missing or ambiguous (sent more than once,
+// in any letter case, or as an array).
+function readHeader(headers) {
+  if (!headers || typeof headers !== "object") return null
+  if (!(headers instanceof Map) && typeof headers.get === "function") {
+    return headers.get(HEADER) // Headers joins repeats with ", ", which never verifies
+  }
+  const wanted = HEADER.toLowerCase()
+  const entries = headers instanceof Map ? headers.entries() : Object.entries(headers)
+  const found = []
+  for (const [name, value] of entries) {
+    if (typeof name === "string" && name.toLowerCase() === wanted) found.push(value)
+  }
+  return found.length === 1 && typeof found[0] === "string" ? found[0] : null
 }
