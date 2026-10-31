@@ -46,7 +46,7 @@ const verifier = new AccessVerifier({
 ```
 
 At startup, `await verifier.check()` and log the error it throws if the team's keys can't be
-loaded or none of them imports as an RS256 public key. Otherwise a broken environment looks exactly like "nobody is signed in".
+loaded or none of them is a usable RS256 public key (2048 bits or more, with a `kid`). Otherwise a broken environment looks exactly like "nobody is signed in".
 
 Next.js (16+, `proxy.ts`), guarding the same paths as the Access app:
 
