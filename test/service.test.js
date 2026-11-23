@@ -6,7 +6,9 @@ import assert from "node:assert/strict"
 import { describe, test } from "node:test"
 
 import { AccessVerifier, HEADER } from "../index.js"
-import { AUD, TEAM, attackerKey, makeToken, stubFetch } from "./helpers.js"
+import { SignJWT } from "jose"
+
+import { AUD, TEAM, attackerKey, makeToken, stubFetch, teamKey } from "./helpers.js"
 
 const now = () => Math.floor(Date.now() / 1000)
 const verifier = (opts = {}) => new AccessVerifier({ teamDomain: TEAM, audience: AUD, ...opts })
@@ -56,6 +58,8 @@ describe("verifyService: everything else is null", () => {
     "missing common_name": { common_name: null },
     "empty common_name": { common_name: "" },
     "non-string common_name": { common_name: 42 },
+    "common_name as an array": { common_name: [CLIENT_ID] },
+    "common_name as an object": { common_name: { value: CLIENT_ID } },
     "a person's token (has an email) is not a service token": { email: "someone@example.com" },
     "a person's token with a common_name is still not a service token": {
       email: "someone@example.com",
@@ -72,6 +76,25 @@ describe("verifyService: everything else is null", () => {
   test("an empty-string email still counts as a person's claim and is refused", async (t) => {
     stubFetch(t)
     assert.equal(await verifier().verifyService(await serviceToken({ email: "" })), null)
+  })
+
+  test("an explicit null email still counts as an email claim and is refused", async (t) => {
+    stubFetch(t)
+    // makeToken drops null claims, so sign this one directly.
+    const token = await new SignJWT({ aud: [AUD], iss: TEAM, email: null, sub: "", common_name: CLIENT_ID })
+      .setProtectedHeader({ alg: "RS256", kid: "team-key-1" })
+      .setIssuedAt()
+      .setExpirationTime("1h")
+      .sign(teamKey.privateKey)
+    assert.equal(await verifier().verifyService(token), null)
+  })
+
+  test("serviceFromHeaders reads a Map and a mixed-case plain-object header", async (t) => {
+    stubFetch(t)
+    const v = verifier()
+    const token = await serviceToken()
+    assert.notEqual(await v.serviceFromHeaders(new Map([[HEADER, token]])), null)
+    assert.notEqual(await v.serviceFromHeaders({ "CF-ACCESS-jwt-assertion": token }), null)
   })
 
   test("a key fetch failure is null, not an exception", async (t) => {

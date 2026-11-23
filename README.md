@@ -97,13 +97,22 @@ an `email` claim is a person's and is refused here, so neither path can stand in
 
 ```ts
 const feed = new AccessVerifier({ teamDomain, audience: process.env.FEED_ACCESS_AUD! })
+const expected = process.env.FEED_CLIENT_ID
+if (!expected) throw new Error("FEED_CLIENT_ID is not set") // unset must not mean "anyone"
 const service = await feed.serviceFromHeaders(request.headers)
-if (service?.commonName !== process.env.FEED_CLIENT_ID) return new Response(null, { status: 401 })
+if (!service || service.commonName !== expected) return new Response(null, { status: 401 })
 ```
+
+Check that the expected client id is set: `service?.commonName !== undefined` is false when
+both are missing, and that comparison would let every request in.
 
 Give the machine path **its own Access app** (and so its own AUD), scoped to only the paths it
 reads, and compare `commonName` to the one client you expect: any service token your team
-issues can be added to some policy, and the AUD is what ties a token to this app.
+issues can be added to some policy, and the AUD is what ties a token to this app. Keep the
+feed app's only policy *Service Auth* for that one token: Access may also set `common_name`
+from a client certificate's CN under an mTLS rule.
+
+Not yet ported to gatekeeper (Python), which still has `verify` only.
 
 ## What this does not do
 
