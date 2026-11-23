@@ -13,7 +13,7 @@ through. `AccessVerifier` resolves to an `Identity` only when that token is:
   key-set refresh, hourly by default),
 - issued by your team (`iss`), meant for this app (`aud`), and in date (`exp`, `nbf`, and an
   `iat` that isn't in the future),
-- carrying an `email` (service tokens are not people),
+- carrying an `email` (service tokens are not people; see [Service tokens](#service-tokens)),
 - under 16 KiB.
 
 Everything else (no header, a header sent more than once in any letter case, a forged or
@@ -86,6 +86,24 @@ pages that call owner actions under the Access app too.
 
 Any framework: pass the request's headers (a `Headers`, a `Map`, or a plain object such as
 Node's `req.headers`) to `fromHeaders`, or the header value to `verify`.
+
+## Service tokens
+
+A machine reader (a scheduled job, another app) authenticates to Access with a **service
+token**, admitted by a *Service Auth* policy. Its JWT has no `email`, so `verify` refuses it.
+`verifyService` / `serviceFromHeaders` run the **same** signature, `iss`, `exp`, `nbf`, `iat`
+and `aud` checks and return only `{ commonName }`, the token's client id. A token that carries
+an `email` claim is a person's and is refused here, so neither path can stand in for the other.
+
+```ts
+const feed = new AccessVerifier({ teamDomain, audience: process.env.FEED_ACCESS_AUD! })
+const service = await feed.serviceFromHeaders(request.headers)
+if (service?.commonName !== process.env.FEED_CLIENT_ID) return new Response(null, { status: 401 })
+```
+
+Give the machine path **its own Access app** (and so its own AUD), scoped to only the paths it
+reads, and compare `commonName` to the one client you expect: any service token your team
+issues can be added to some policy, and the AUD is what ties a token to this app.
 
 ## What this does not do
 
