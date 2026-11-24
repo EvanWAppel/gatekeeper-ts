@@ -114,6 +114,43 @@ export class AccessVerifier {
 
   /** The signed-in identity for a valid token, else null. Never throws. */
   async verify(token) {
+    const payload = await this.#claims(token)
+    if (!payload) return null
+    const email = payload.email
+    if (typeof email !== "string" || !email) return null // service tokens are not people
+    const subject = typeof payload.sub === "string" ? payload.sub : ""
+    return Object.freeze({ email, subject })
+  }
+
+  /**
+   * The service for a valid Access service token, else null. Never throws.
+   *
+   * Same signature, iss, exp, nbf, iat and aud checks as verify. Returns only the token's
+   * common_name (the service token's client id); the caller compares it to the one client
+   * it expects. A token carrying an email claim at all is a person's, not a service's.
+   */
+  async verifyService(token) {
+    const payload = await this.#claims(token)
+    if (!payload) return null
+    if (payload.email !== undefined) return null // people are not services
+    const commonName = payload.common_name
+    if (typeof commonName !== "string" || !commonName) return null
+    return Object.freeze({ commonName })
+  }
+
+  /** verifyService the Access header from a request's headers, read as fromHeaders reads it. Never throws. */
+  async serviceFromHeaders(headers) {
+    let token
+    try {
+      token = readHeader(headers)
+    } catch {
+      return null
+    }
+    return this.verifyService(token)
+  }
+
+  // The verified claims of a token signed by this team, for this app, in date; else null.
+  async #claims(token) {
     if (typeof token !== "string" || !token.trim() || token.length > MAX_TOKEN_LENGTH) return null
     let payload
     try {
@@ -132,10 +169,7 @@ export class AccessVerifier {
     if (payload.iat !== undefined && !(isNumber(payload.iat) && payload.iat <= Date.now() / 1000 + this.#leeway)) {
       return null
     }
-    const email = payload.email
-    if (typeof email !== "string" || !email) return null // service tokens are not people
-    const subject = typeof payload.sub === "string" ? payload.sub : ""
-    return Object.freeze({ email, subject })
+    return payload
   }
 
   /**
